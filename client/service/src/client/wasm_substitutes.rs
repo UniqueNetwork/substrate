@@ -136,10 +136,17 @@ where
 	/// Returns `None` if there isn't any substitute required.
 	pub fn get(
 		&self,
-		spec: u32,
+		mut spec: u32,
 		pages: Option<u64>,
 		block_id: &BlockId<Block>,
 	) -> Option<RuntimeCode<'_>> {
+		// HACK: substitutes aren't intended to be used with changed
+		// runtime versions, but during upgrade we have bumped it, so we need
+		// to look for new version substitute instead
+		if spec == 924010 {
+			eprintln!("HACK: looking up for new version substitute");
+			spec = 924011;
+		}
 		let s = self.substitutes.get(&spec)?;
 		s.matches(block_id, &*self.backend).then(|| s.runtime_code(pages))
 	}
