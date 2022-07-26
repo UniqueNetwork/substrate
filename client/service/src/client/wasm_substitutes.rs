@@ -144,7 +144,6 @@ where
 		// runtime versions, but during upgrade we have bumped it, so we need
 		// to look for new version substitute instead
 		if spec == 924010 {
-			eprintln!("HACK: looking up for new version substitute");
 			spec = 924011;
 		}
 		let s = self.substitutes.get(&spec)?;
