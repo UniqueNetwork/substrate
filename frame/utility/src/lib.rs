@@ -58,9 +58,14 @@ pub mod weights;
 
 use codec::{Decode, Encode};
 use frame_support::{
-	dispatch::{extract_actual_weight, GetDispatchInfo, PostDispatchInfo},
-	traits::{IsSubType, OriginTrait, UnfilteredDispatchable},
+	dispatch::{
+		extract_actual_weight, DispatchErrorWithPostInfo, GetDispatchInfo, PostDispatchInfo,
+	},
+	pallet_prelude::DispatchResultWithPostInfo,
+	traits::{Contains, IsSubType, OriginTrait, UnfilteredDispatchable},
+	weights::Weight,
 };
+use frame_system::pallet_prelude::OriginFor;
 use sp_core::TypeId;
 use sp_io::hashing::blake2_256;
 use sp_runtime::traits::{BadOrigin, Dispatchable, TrailingZeroInput};
@@ -100,6 +105,9 @@ pub mod pallet {
 
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
+
+		/// Filtering calls.
+		type CallFilter: Contains<<Self as Config>::RuntimeCall>;
 	}
 
 	#[pallet::event]
@@ -168,8 +176,9 @@ pub mod pallet {
 		/// - `calls`: The calls to be dispatched from the same origin. The number of call must not
 		///   exceed the constant: `batched_calls_limit` (available in constant metadata).
 		///
-		/// If origin is root then the calls are dispatched without checking origin filter. (This
-		/// includes bypassing `frame_system::Config::BaseCallFilter`).
+		/// If the source is root, then calls are sent without checking the origin and call filters.
+		/// (This involves bypassing `frame_system::Config::BaseCallFilter` and
+		/// `Config::CallFilter`).
 		///
 		/// ## Complexity
 		/// - O(C) where C is the number of calls to be batched.
@@ -215,12 +224,14 @@ pub mod pallet {
 			let mut weight = Weight::zero();
 			for (index, call) in calls.into_iter().enumerate() {
 				let info = call.get_dispatch_info();
+
 				// If origin is root, don't apply any dispatch filters; root can call anything.
 				let result = if is_root {
 					call.dispatch_bypass_filter(origin.clone())
 				} else {
-					call.dispatch(origin.clone())
+					Self::dispatch_filtered(origin.clone(), call)
 				};
+
 				// Add the weight of this call.
 				weight = weight.saturating_add(extract_actual_weight(&result, &info));
 				if let Err(e) = result {
@@ -274,6 +285,7 @@ pub mod pallet {
 			let pseudonym = Self::derivative_account_id(who, index);
 			origin.set_caller_from(frame_system::RawOrigin::Signed(pseudonym));
 			let info = call.get_dispatch_info();
+
 			let result = call.dispatch(origin);
 			// Always take into account the base weight of this call.
 			let mut weight = T::WeightInfo::as_derivative()
@@ -296,8 +308,9 @@ pub mod pallet {
 		/// - `calls`: The calls to be dispatched from the same origin. The number of call must not
 		///   exceed the constant: `batched_calls_limit` (available in constant metadata).
 		///
-		/// If origin is root then the calls are dispatched without checking origin filter. (This
-		/// includes bypassing `frame_system::Config::BaseCallFilter`).
+		/// If the source is root, then calls are sent without checking the origin and call filters.
+		/// (This involves bypassing `frame_system::Config::BaseCallFilter` and
+		/// `Config::CallFilter`).
 		///
 		/// ## Complexity
 		/// - O(C) where C is the number of calls to be batched.
@@ -337,6 +350,7 @@ pub mod pallet {
 			let mut weight = Weight::zero();
 			for (index, call) in calls.into_iter().enumerate() {
 				let info = call.get_dispatch_info();
+
 				// If origin is root, bypass any dispatch filter; root can call anything.
 				let result = if is_root {
 					call.dispatch_bypass_filter(origin.clone())
@@ -349,7 +363,7 @@ pub mod pallet {
 							!matches!(c.is_sub_type(), Some(Call::batch_all { .. }))
 						},
 					);
-					call.dispatch(filtered_origin)
+					Self::dispatch_filtered(filtered_origin, call)
 				};
 				// Add the weight of this call.
 				weight = weight.saturating_add(extract_actual_weight(&result, &info));
@@ -405,8 +419,9 @@ pub mod pallet {
 		/// - `calls`: The calls to be dispatched from the same origin. The number of call must not
 		///   exceed the constant: `batched_calls_limit` (available in constant metadata).
 		///
-		/// If origin is root then the calls are dispatch without checking origin filter. (This
-		/// includes bypassing `frame_system::Config::BaseCallFilter`).
+		/// If the source is root, then calls are sent without checking the origin and call filters.
+		/// (This involves bypassing `frame_system::Config::BaseCallFilter` and
+		/// `Config::CallFilter`).
 		///
 		/// ## Complexity
 		/// - O(C) where C is the number of calls to be batched.
@@ -448,12 +463,14 @@ pub mod pallet {
 			let mut has_error: bool = false;
 			for call in calls.into_iter() {
 				let info = call.get_dispatch_info();
+
 				// If origin is root, don't apply any dispatch filters; root can call anything.
 				let result = if is_root {
 					call.dispatch_bypass_filter(origin.clone())
 				} else {
-					call.dispatch(origin.clone())
+					Self::dispatch_filtered(origin.clone(), call)
 				};
+
 				// Add the weight of this call.
 				weight = weight.saturating_add(extract_actual_weight(&result, &info));
 				if let Err(e) = result {
@@ -506,5 +523,19 @@ impl<T: Config> Pallet<T> {
 		let entropy = (b"modlpy/utilisuba", who, index).using_encoded(blake2_256);
 		Decode::decode(&mut TrailingZeroInput::new(entropy.as_ref()))
 			.expect("infinite length input; no invalid inputs for type; qed")
+	}
+
+	fn dispatch_filtered(
+		origin: OriginFor<T>,
+		call: <T as Config>::RuntimeCall,
+	) -> DispatchResultWithPostInfo {
+		if <T as Config>::CallFilter::contains(&call) {
+			return call.dispatch(origin)
+		}
+
+		Err(DispatchErrorWithPostInfo {
+			post_info: Some(Weight::default()).into(),
+			error: <frame_system::Error<T>>::CallFiltered.into(),
+		})
 	}
 }

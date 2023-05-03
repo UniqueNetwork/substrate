@@ -86,6 +86,12 @@ pub mod example {
 		pub fn big_variant(_origin: OriginFor<T>, _arg: [u8; 400]) -> DispatchResult {
 			Ok(())
 		}
+
+		#[pallet::call_index(3)]
+		#[pallet::weight(0)]
+		pub fn not_batchable(_origin: OriginFor<T>, _arg: u8) -> DispatchResult {
+			Ok(())
+		}
 	}
 }
 
@@ -245,6 +251,17 @@ impl Contains<RuntimeCall> for TestBaseCallFilter {
 		}
 	}
 }
+
+pub struct TestCallFilter;
+impl Contains<RuntimeCall> for TestCallFilter {
+	fn contains(c: &RuntimeCall) -> bool {
+		match *c {
+			RuntimeCall::Example(example::Call::not_batchable { .. }) => false,
+			_ => true,
+		}
+	}
+}
+
 impl mock_democracy::Config for Test {
 	type RuntimeEvent = RuntimeEvent;
 	type ExternalMajorityOrigin = EnsureProportionAtLeast<u64, Instance1, 3, 4>;
@@ -254,6 +271,7 @@ impl Config for Test {
 	type RuntimeCall = RuntimeCall;
 	type PalletsOrigin = OriginCaller;
 	type WeightInfo = ();
+	type CallFilter = TestCallFilter;
 }
 
 type ExampleCall = example::Call<Test>;
@@ -384,7 +402,7 @@ fn as_derivative_handles_weight_refund() {
 }
 
 #[test]
-fn as_derivative_filters() {
+fn as_derivative_basic_filters() {
 	new_test_ext().execute_with(|| {
 		assert_err_ignore_postinfo!(
 			Utility::as_derivative(
@@ -447,7 +465,7 @@ fn batch_with_signed_works() {
 }
 
 #[test]
-fn batch_with_signed_filters() {
+fn batch_with_signed_base_filters() {
 	new_test_ext().execute_with(|| {
 		assert_ok!(Utility::batch(
 			RuntimeOrigin::signed(1),
@@ -463,6 +481,34 @@ fn batch_with_signed_filters() {
 			}
 			.into(),
 		);
+	});
+}
+
+#[test]
+fn batch_with_signed_call_filters() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(Utility::batch(
+			RuntimeOrigin::signed(1),
+			vec![RuntimeCall::Example(example::Call::not_batchable { arg: 0 })]
+		),);
+		System::assert_last_event(
+			utility::Event::BatchInterrupted {
+				index: 0,
+				error: frame_system::Error::<Test>::CallFiltered.into(),
+			}
+			.into(),
+		);
+	});
+}
+
+#[test]
+fn batch_with_root_call_filters() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(Utility::batch(
+			RuntimeOrigin::root(),
+			vec![RuntimeCall::Example(example::Call::not_batchable { arg: 0 })]
+		),);
+		System::assert_last_event(utility::Event::BatchCompleted.into());
 	});
 }
 
@@ -722,6 +768,30 @@ fn batch_all_does_not_nest() {
 }
 
 #[test]
+fn batch_all_with_signed_call_filters() {
+	new_test_ext().execute_with(|| {
+		assert_err_ignore_postinfo!(
+			Utility::batch_all(
+				RuntimeOrigin::signed(1),
+				vec![RuntimeCall::Example(example::Call::not_batchable { arg: 0 })]
+			),
+			DispatchError::from(frame_system::Error::<Test>::CallFiltered)
+		);
+	});
+}
+
+#[test]
+fn batch_all_with_root_call_filters() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(Utility::batch_all(
+			RuntimeOrigin::root(),
+			vec![RuntimeCall::Example(example::Call::not_batchable { arg: 0 })]
+		),);
+		System::assert_last_event(utility::Event::BatchCompleted.into());
+	});
+}
+
+#[test]
 fn batch_limit() {
 	new_test_ext().execute_with(|| {
 		let calls = vec![RuntimeCall::System(SystemCall::remark { remark: vec![] }); 40_000];
@@ -765,6 +835,28 @@ fn force_batch_works() {
 
 		assert_ok!(Utility::force_batch(RuntimeOrigin::signed(1), vec![call_transfer(2, 50),]),);
 		System::assert_last_event(utility::Event::BatchCompletedWithErrors.into());
+	});
+}
+
+#[test]
+fn force_batch_with_signed_call_filters() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(Utility::force_batch(
+			RuntimeOrigin::signed(1),
+			vec![RuntimeCall::Example(example::Call::not_batchable { arg: 0 })]
+		),);
+		System::assert_last_event(utility::Event::BatchCompletedWithErrors.into());
+	});
+}
+
+#[test]
+fn force_batch_with_root_call_filters() {
+	new_test_ext().execute_with(|| {
+		assert_ok!(Utility::force_batch(
+			RuntimeOrigin::root(),
+			vec![RuntimeCall::Example(example::Call::not_batchable { arg: 0 })]
+		),);
+		System::assert_last_event(utility::Event::BatchCompleted.into());
 	});
 }
 
